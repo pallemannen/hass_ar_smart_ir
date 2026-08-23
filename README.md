@@ -1,19 +1,15 @@
 # AR Smart IR
 
-[![Latest Release](https://img.shields.io/github/v/release/marsh4200/ar_smart_ir?include_prereleases)](https://github.com/marsh4200/ar_smart_ir/releases)
+[![Latest Release](https://img.shields.io/github/v/release/pallemannen/hass_ar_smart_ir?include_prereleases)](https://github.com/pallemannen/hass_ar_smart_ir/releases)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![Stars](https://img.shields.io/github/stars/marsh4200/ar_smart_ir)](https://github.com/marsh4200/ar_smart_ir/stargazers)
+[![Stars](https://img.shields.io/github/stars/pallemannen/hass_ar_smart_ir)](https://github.com/pallemannen/hass_ar_smart_ir/stargazers)
 
 
 
 [![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](
-  https://my.home-assistant.io/redirect/hacs_repository/?owner=marsh4200&repository=ar_smart_ir&category=integration
+  https://my.home-assistant.io/redirect/hacs_repository/?owner=pallemannen&repository=hass_ar_smart_ir&category=integration
 )
-
-<p align="center">
-  <img src=".github/assets/archived.svg" alt="Project Archived - AR Smart IR is no longer under active development" width="100%">
-</p>
 
 
 
@@ -196,7 +192,7 @@ Some controller and device combinations may still need real-world validation, bu
 
 Click below to open the repository in HACS:
 
-[![Open your Home Assistant instance and open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=marsh4200&repository=ar_smart_ir&category=integration)
+[![Open your Home Assistant instance and open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=pallemannen&repository=hass_ar_smart_ir&category=integration)
 
 ### Manual Installation
 
