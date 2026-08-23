@@ -670,18 +670,25 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         codeset be swapped without deleting and recreating the device.
         """
         reconfigure_entry = self._get_reconfigure_entry()
-        self._data = dict(reconfigure_entry.data)
+        full_data = dict(reconfigure_entry.data)
+        wizard_keys = (CONF_PLATFORM, "manufacturer", CONF_DEVICE_CODE, CONF_CONTROLLER)
+
+        # Only the fields the manufacturer/model/controller steps themselves
+        # set belong in self._data - matching what a fresh (non-reconfigure)
+        # flow accumulates by the time it reaches the name step. Everything
+        # else (controller_data, sensors, etc.) must live only in
+        # _pending_name_input and be re-derived fresh at each render;
+        # otherwise a stale field like controller_data survives untouched
+        # through the whole wizard and collides with a freshly submitted
+        # controller_entity for controllers that don't show the text box
+        # (e.g. Broadlink), wrongly tripping the "can't set both" check.
+        self._data = {
+            key: value for key, value in full_data.items() if key in wizard_keys
+        }
         self._pending_name_input = {
             key: value
-            for key, value in self._data.items()
-            if key
-            not in (
-                CONF_PLATFORM,
-                "manufacturer",
-                CONF_DEVICE_CODE,
-                CONF_CONTROLLER,
-                "unique_id",
-            )
+            for key, value in full_data.items()
+            if key not in (*wizard_keys, "unique_id")
         }
         return await self.async_step_manufacturer()
 
