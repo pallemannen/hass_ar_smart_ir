@@ -561,11 +561,18 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data["manufacturer"] = user_input["manufacturer"]
             return await self.async_step_model()
 
+        manufacturer_field = vol.Required("manufacturer")
+        current_manufacturer = self._data.get("manufacturer")
+        if current_manufacturer in manufacturers:
+            manufacturer_field = vol.Required(
+                "manufacturer", default=current_manufacturer
+            )
+
         return self.async_show_form(
             step_id="manufacturer",
             data_schema=vol.Schema(
                 {
-                    vol.Required("manufacturer"): selector.SelectSelector(
+                    manufacturer_field: selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=manufacturers,
                             mode=selector.SelectSelectorMode.DROPDOWN,
@@ -595,11 +602,26 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for item in models
         ]
 
+        current_code = self._data.get(CONF_DEVICE_CODE)
+        matching_default = next(
+            (
+                item["code"]
+                for item in models
+                if str(item["code"]) == str(current_code)
+            ),
+            None,
+        )
+        device_code_field = vol.Required(CONF_DEVICE_CODE)
+        if matching_default is not None:
+            device_code_field = vol.Required(
+                CONF_DEVICE_CODE, default=matching_default
+            )
+
         return self.async_show_form(
             step_id="model",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_DEVICE_CODE): selector.SelectSelector(
+                    device_code_field: selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=options,
                             mode=selector.SelectSelectorMode.DROPDOWN,
@@ -617,11 +639,18 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_CONTROLLER] = user_input[CONF_CONTROLLER]
             return await self.async_step_name()
 
+        controller_field = vol.Required(CONF_CONTROLLER)
+        current_controller = self._data.get(CONF_CONTROLLER)
+        if current_controller in CONTROLLERS:
+            controller_field = vol.Required(
+                CONF_CONTROLLER, default=current_controller
+            )
+
         return self.async_show_form(
             step_id="controller",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_CONTROLLER): selector.SelectSelector(
+                    controller_field: selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=CONTROLLERS,
                             mode=selector.SelectSelectorMode.DROPDOWN,
@@ -631,6 +660,30 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
         )
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Entry point for the "Reconfigure" action on an existing entry.
+
+        Re-walks the same manufacturer -> model -> controller -> name wizard
+        used when adding a device, prefilled from the current entry, but
+        updates it in place instead of creating a new one - lets a wrong
+        codeset be swapped without deleting and recreating the device.
+        """
+        reconfigure_entry = self._get_reconfigure_entry()
+        self._data = dict(reconfigure_entry.data)
+        self._pending_name_input = {
+            key: value
+            for key, value in self._data.items()
+            if key
+            not in (
+                CONF_PLATFORM,
+                "manufacturer",
+                CONF_DEVICE_CODE,
+                CONF_CONTROLLER,
+                "unique_id",
+            )
+        }
+        return await self.async_step_manufacturer()
 
     async def async_step_name(self, user_input=None):
         controller = self._data[CONF_CONTROLLER]
@@ -685,11 +738,22 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     return await self._async_show_name_form(user_input)
 
-            data["unique_id"] = uuid.uuid4().hex
             data.pop(CONF_GO_BACK, None)
             data.pop(CONF_TEST_DEVICE, None)
             data.pop(CONF_TEST_COMMAND, None)
 
+            if self.source == config_entries.SOURCE_RECONFIGURE:
+                reconfigure_entry = self._get_reconfigure_entry()
+                data["unique_id"] = reconfigure_entry.data.get(
+                    "unique_id", reconfigure_entry.unique_id
+                )
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    title=data[CONF_NAME],
+                    data=data,
+                )
+
+            data["unique_id"] = uuid.uuid4().hex
             await self.async_set_unique_id(data["unique_id"])
             self._abort_if_unique_id_configured()
 
