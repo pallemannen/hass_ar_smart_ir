@@ -4,6 +4,17 @@ All notable changes to this fork are documented here, starting from where
 we took over maintenance. For history before that, see the original
 [marsh4200/ar_smart_ir](https://github.com/marsh4200/ar_smart_ir).
 
+## Unreleased
+
+- Add a device-wide repeat: every command that does not set its own repeat
+  count or delay is sent that many times, that far apart. Useful when a
+  device sometimes misses a command. Per-command repeat settings and
+  codesets that set `num_repeats` keep working as before; the default is 1,
+  so nothing changes until it is raised.
+- Learning a code no longer pins the command to a single send: a learned
+  code follows the device-wide repeat, unless the command already had its
+  own repeat settings, which are now kept.
+
 ## 1.8.1
 
 - Fix reconfigure flow: `async_step_reconfigure` was copying the entire

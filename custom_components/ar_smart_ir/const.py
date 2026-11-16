@@ -11,6 +11,9 @@ CONF_CONTROLLER_DATA = "controller_data"
 CONF_CONTROLLER_ENTITY = "controller_entity"
 CONF_INFRARED_ENTITY = "infrared_entity"
 CONF_DELAY = "delay"
+# Repeat count and delay for every command that does not set its own.
+CONF_DEFAULT_REPEAT_COUNT = "default_repeat_count"
+CONF_DEFAULT_REPEAT_DELAY = "default_repeat_delay_secs"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
 CONF_TEMPERATURE_UNIT = "temperature_unit"
 CONF_HUMIDITY_SENSOR = "humidity_sensor"
@@ -41,6 +44,7 @@ CONF_LEARN_BROADLINK_ENTITY = "learn_broadlink_entity"
 CONF_LEARN_TIMEOUT = "learn_timeout"
 
 DEFAULT_DELAY = 0.5
+DEFAULT_REPEAT_COUNT = 1
 DEFAULT_DEVICE_CLASS = "tv"
 
 # Codeset temperature unit (issue #33).

@@ -15,8 +15,10 @@ from homeassistant.config_entries import ConfigEntry
 
 from .const import CONF_COMMAND_OVERRIDES, DOMAIN, PLATFORMS
 from .helpers import (
+    REPEAT_KEYS,
+    get_command_value_at_path,
     parse_command_overrides,
-    set_command_override_at_path,
+    set_command_value_at_path,
 )
 from .importer import import_dropins
 
@@ -254,26 +256,17 @@ async def _async_handle_learn_command(call: ServiceCall) -> None:
         current_options.get(CONF_COMMAND_OVERRIDES, {})
     )
 
-    override_data = set_command_override_at_path(
-        override_data,
-        command_path,
-        repeat_count=1,
-        repeat_delay_secs=0.0,
+    # Store the learned Base64 code for the command. A repeat count or delay
+    # already set for this command is kept; without one, the command follows
+    # the device's default repeat settings like every other command.
+    existing = get_command_value_at_path(override_data, command_path)
+    learned = (
+        {key: value for key, value in existing.items() if key in REPEAT_KEYS}
+        if isinstance(existing, dict)
+        else {}
     )
-
-    # Patch the learned Base64 code into the leaf dict.
-    leaf_parent = override_data
-    for part in command_path[:-1]:
-        leaf_parent = leaf_parent[part]
-    leaf_key = command_path[-1]
-    if isinstance(leaf_parent.get(leaf_key), dict):
-        leaf_parent[leaf_key]["code"] = learned_code
-    else:
-        leaf_parent[leaf_key] = {
-            "code": learned_code,
-            "repeat_count": 1,
-            "repeat_delay_secs": 0.0,
-        }
+    learned["code"] = learned_code
+    override_data = set_command_value_at_path(override_data, command_path, learned)
 
     new_options = {**current_options, CONF_COMMAND_OVERRIDES: override_data}
     hass.config_entries.async_update_entry(entry, options=new_options)

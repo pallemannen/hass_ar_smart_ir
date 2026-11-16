@@ -23,12 +23,15 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from .const import (
     CONF_COMMAND_OVERRIDES,
     CONF_CONTROLLER,
+    CONF_DEFAULT_REPEAT_COUNT,
+    CONF_DEFAULT_REPEAT_DELAY,
     CONF_HUMIDITY_SENSOR,
     CONF_PASSIVE_MODE,
     CONF_POWER_SENSOR,
     CONF_POWER_SENSOR_RESTORE_STATE,
     CONF_TEMPERATURE_SENSOR,
     CONF_TEMPERATURE_UNIT,
+    DEFAULT_REPEAT_COUNT,
     TEMPERATURE_UNIT_AUTO,
 )
 from .controller import get_controller
@@ -176,6 +179,10 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
         self._controller_data = config.get(CONF_CONTROLLER_DATA)
         self._delay = config.get(CONF_DELAY, DEFAULT_DELAY)
+        self._default_repeat_count = config.get(
+            CONF_DEFAULT_REPEAT_COUNT, DEFAULT_REPEAT_COUNT
+        )
+        self._default_repeat_delay_secs = config.get(CONF_DEFAULT_REPEAT_DELAY)
         self._temperature_sensor = config.get(CONF_TEMPERATURE_SENSOR)
         self._humidity_sensor = config.get(CONF_HUMIDITY_SENSOR)
         self._power_sensor = config.get(CONF_POWER_SENSOR)
@@ -254,6 +261,8 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._commands_encoding,
             self._controller_data,
             self._delay,
+            self._default_repeat_count,
+            self._default_repeat_delay_secs,
         )
 
     async def async_added_to_hass(self):

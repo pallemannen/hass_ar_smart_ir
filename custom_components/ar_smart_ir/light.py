@@ -15,7 +15,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .controller import get_controller
 from .helpers import async_load_device_data
-from .const import CONF_COMMAND_OVERRIDES, CONF_CONTROLLER
+from .const import (
+    CONF_COMMAND_OVERRIDES,
+    CONF_CONTROLLER,
+    CONF_DEFAULT_REPEAT_COUNT,
+    CONF_DEFAULT_REPEAT_DELAY,
+    DEFAULT_REPEAT_COUNT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +95,10 @@ class SmartIRLight(LightEntity, RestoreEntity):
 
         self._controller_data = config.get(CONF_CONTROLLER_DATA)
         self._delay = config.get(CONF_DELAY, DEFAULT_DELAY)
+        self._default_repeat_count = config.get(
+            CONF_DEFAULT_REPEAT_COUNT, DEFAULT_REPEAT_COUNT
+        )
+        self._default_repeat_delay_secs = config.get(CONF_DEFAULT_REPEAT_DELAY)
         self._power_sensor = config.get(CONF_POWER_SENSOR)
 
         self._supported_controller = config.get(
@@ -146,6 +156,8 @@ class SmartIRLight(LightEntity, RestoreEntity):
             self._commands_encoding,
             self._controller_data,
             self._delay,
+            self._default_repeat_count,
+            self._default_repeat_delay_secs,
         )
 
     async def async_added_to_hass(self):

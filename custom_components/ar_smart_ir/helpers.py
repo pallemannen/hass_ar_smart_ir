@@ -196,6 +196,96 @@ def remove_command_override_at_path(
     return overrides
 
 
+# Keys that set how often a command is sent and the pause between sends.
+REPEAT_KEYS = (
+    "repeat_count",
+    "repeats",
+    "num_repeats",
+    "repeat_delay_secs",
+    "repeat_delay",
+    "delay_secs",
+)
+
+
+def set_command_value_at_path(
+    overrides: dict[str, Any],
+    path: tuple[str, ...],
+    value: Any,
+) -> dict[str, Any]:
+    """Store ``value`` as the override for the command at ``path``."""
+    current = overrides
+    for part in path[:-1]:
+        node = current.get(part)
+        if not isinstance(node, dict) or _is_command_meta_dict(node):
+            node = {}
+            current[part] = node
+        current = node
+    current[path[-1]] = value
+    return overrides
+
+
+def get_command_repeat_at_path(
+    overrides: dict[str, Any],
+    path: tuple[str, ...],
+) -> tuple[int, float] | None:
+    """Return the command's own (repeat_count, repeat_delay_secs).
+
+    None when the override for ``path`` sets no repeat, so the command
+    follows the device defaults.
+    """
+    leaf = get_command_value_at_path(overrides, path)
+    if not isinstance(leaf, dict) or not any(key in leaf for key in REPEAT_KEYS):
+        return None
+    try:
+        repeat_count = max(1, int(leaf.get("repeat_count", 1) or 1))
+    except (TypeError, ValueError):
+        repeat_count = 1
+    try:
+        repeat_delay_secs = max(0.0, float(leaf.get("repeat_delay_secs", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        repeat_delay_secs = 0.0
+    return repeat_count, repeat_delay_secs
+
+
+def set_command_repeat_at_path(
+    overrides: dict[str, Any],
+    path: tuple[str, ...],
+    repeat_count: int,
+    repeat_delay_secs: float,
+) -> dict[str, Any]:
+    """Give the command at ``path`` its own repeat count and delay.
+
+    Unlike set_command_override_at_path, a learned code or a sequence already
+    saved for the command is kept.
+    """
+    leaf = get_command_value_at_path(overrides, path)
+    if _is_command_meta_dict(leaf):
+        value = {key: item for key, item in leaf.items() if key not in REPEAT_KEYS}
+    else:
+        value = {}
+    value["repeat_count"] = max(1, int(repeat_count))
+    value["repeat_delay_secs"] = max(0.0, float(repeat_delay_secs))
+    return set_command_value_at_path(overrides, path, value)
+
+
+def clear_command_repeat_at_path(
+    overrides: dict[str, Any],
+    path: tuple[str, ...],
+) -> dict[str, Any]:
+    """Drop the command's own repeat so it follows the device defaults.
+
+    A learned code or a sequence saved for the command is kept; an override
+    left with nothing in it is removed.
+    """
+    leaf = get_command_value_at_path(overrides, path)
+    if not isinstance(leaf, dict):
+        return overrides
+    remaining = {key: item for key, item in leaf.items() if key not in REPEAT_KEYS}
+    if _is_command_meta_dict(remaining):
+        return set_command_value_at_path(overrides, path, remaining)
+    return remove_command_override_at_path(overrides, path)
+
+
 async def async_load_device_data(
     device_code: int | str,
     platform: str,

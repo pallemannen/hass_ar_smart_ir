@@ -124,8 +124,20 @@ def _looks_like_entity_id(value) -> bool:
 # ── factory ─────────────────────────────────────────────────────────────────
 
 
-def get_controller(hass, controller, encoding, controller_data, delay):
-    """Return a controller compatible with the specification provided."""
+def get_controller(
+    hass,
+    controller,
+    encoding,
+    controller_data,
+    delay,
+    default_repeat_count=1,
+    default_repeat_delay_secs=None,
+):
+    """Return a controller compatible with the specification provided.
+
+    ``default_repeat_count`` and ``default_repeat_delay_secs`` apply to every
+    command that does not set its own repeat count or delay.
+    """
     controllers = {
         BROADLINK_CONTROLLER: BroadlinkController,
         LINKNLINK_CONTROLLER: LinkNLinkController,
@@ -139,11 +151,19 @@ def get_controller(hass, controller, encoding, controller_data, delay):
     }
 
     try:
-        return controllers[controller](
-            hass, controller, encoding, controller_data, delay
-        )
+        controller_class = controllers[controller]
     except KeyError as err:
         raise Exception(f"The controller '{controller}' is not supported.") from err
+
+    return controller_class(
+        hass,
+        controller,
+        encoding,
+        controller_data,
+        delay,
+        default_repeat_count,
+        default_repeat_delay_secs,
+    )
 
 
 # ── base class ──────────────────────────────────────────────────────────────
@@ -152,7 +172,16 @@ def get_controller(hass, controller, encoding, controller_data, delay):
 class AbstractController(ABC):
     """Representation of an IR/RF controller."""
 
-    def __init__(self, hass, controller, encoding, controller_data, delay):
+    def __init__(
+        self,
+        hass,
+        controller,
+        encoding,
+        controller_data,
+        delay,
+        default_repeat_count=1,
+        default_repeat_delay_secs=None,
+    ):
         self.check_encoding(encoding)
 
         self.hass = hass
@@ -160,6 +189,15 @@ class AbstractController(ABC):
         self._encoding = encoding
         self._controller_data = controller_data
         self._delay = delay
+
+        try:
+            self._default_repeat_count = max(1, int(default_repeat_count))
+        except (TypeError, ValueError):
+            self._default_repeat_count = 1
+        # None means "use the delay between commands" (see _repeat_with_delay).
+        self._default_repeat_delay_secs = self._parse_positive_float(
+            default_repeat_delay_secs
+        )
 
     @abstractmethod
     def check_encoding(self, encoding):
@@ -179,10 +217,24 @@ class AbstractController(ABC):
             return None
         return None
 
-    def _get_command_spec(self, command):
+    def _get_command_spec(self, command, use_defaults=False):
+        """Return (code, repeat_count, repeat_delay_secs) for ``command``.
+
+        With ``use_defaults``, a command that does not set its own repeat
+        count or delay gets the device defaults. Only the command as a whole
+        takes the defaults; the steps of a sequence and the codes inside a
+        command are sent once per repeat, so the defaults are not applied to
+        them again.
+        """
         code = command
         repeat_count = 1
         repeat_delay_secs = None
+        sets_repeat_count = isinstance(command, dict) and any(
+            key in command for key in ("repeat_count", "repeats", "num_repeats")
+        )
+        sets_repeat_delay = isinstance(command, dict) and any(
+            key in command for key in ("repeat_delay_secs", "repeat_delay", "delay_secs")
+        )
 
         if isinstance(command, dict):
             code = command.get("code") or command.get("command") or command.get("value")
@@ -214,10 +266,18 @@ class AbstractController(ABC):
         except (TypeError, ValueError):
             repeat_delay_secs = None
 
+        if use_defaults:
+            if not sets_repeat_count:
+                repeat_count = self._default_repeat_count
+            if not sets_repeat_delay and self._default_repeat_delay_secs is not None:
+                repeat_delay_secs = self._default_repeat_delay_secs
+
         return code, repeat_count, repeat_delay_secs
 
-    def _get_command_list(self, command):
-        code, repeat_count, repeat_delay_secs = self._get_command_spec(command)
+    def _get_command_list(self, command, use_defaults=False):
+        code, repeat_count, repeat_delay_secs = self._get_command_spec(
+            command, use_defaults
+        )
         commands = code if isinstance(code, list) else [code]
         return commands, repeat_count, repeat_delay_secs
 
@@ -225,7 +285,9 @@ class AbstractController(ABC):
         if isinstance(command, dict):
             sequence = command.get("sequence", command.get("steps"))
             if isinstance(sequence, list):
-                _code, repeat_count, repeat_delay_secs = self._get_command_spec(command)
+                _code, repeat_count, repeat_delay_secs = self._get_command_spec(
+                    command, use_defaults=True
+                )
                 step_delay_secs = self._parse_positive_float(
                     command.get(
                         "step_delay_secs",
@@ -236,7 +298,9 @@ class AbstractController(ABC):
                     step_delay_secs = self._delay
                 return sequence, repeat_count, repeat_delay_secs, step_delay_secs
 
-        commands, repeat_count, repeat_delay_secs = self._get_command_list(command)
+        commands, repeat_count, repeat_delay_secs = self._get_command_list(
+            command, use_defaults=True
+        )
         return commands, repeat_count, repeat_delay_secs, self._delay
 
     async def _repeat_with_delay(self, action, repeat_count, repeat_delay_secs):
