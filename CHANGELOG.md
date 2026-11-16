@@ -14,6 +14,19 @@ we took over maintenance. For history before that, see the original
 - Learning a code no longer pins the command to a single send: a learned
   code follows the device-wide repeat, unless the command already had its
   own repeat settings, which are now kept.
+- Options are now a menu: **General settings** (which holds the
+  device-wide repeat) or **Repeat or learn one command**. Picking a
+  command has a screen of its own with a searchable list. Before, the
+  list sat at the bottom of the long settings form, where clicking it
+  could jump the dialog back to the top without opening, so no command
+  other than the first could be picked.
+- The next screen shows the picked command's current repeat settings, or
+  that it follows the device default, instead of keeping the previous
+  command's values in the fields.
+- Changing a learned command's repeat settings no longer deletes the
+  learned code.
+- Repeat count is a number box instead of a slider that did not show its
+  value.
 
 ## 1.8.1
 

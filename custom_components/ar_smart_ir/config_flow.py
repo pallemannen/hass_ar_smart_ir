@@ -15,6 +15,8 @@ from .const import (
     CONF_CONTROLLER,
     CONF_CONTROLLER_DATA,
     CONF_CONTROLLER_ENTITY,
+    CONF_DEFAULT_REPEAT_COUNT,
+    CONF_DEFAULT_REPEAT_DELAY,
     CONF_DELAY,
     CONF_DEVICE_CLASS,
     CONF_DEVICE_CODE,
@@ -36,8 +38,10 @@ from .const import (
     TEMPERATURE_UNIT_OPTIONS,
     CONF_TEST_COMMAND,
     CONF_TEST_DEVICE,
+    CONF_USE_DEVICE_DEFAULT,
     DEFAULT_DEVICE_CLASS,
     DEFAULT_DELAY,
+    DEFAULT_REPEAT_COUNT,
     DOMAIN,
     PLATFORM_TITLES,
     PLATFORMS,
@@ -47,15 +51,16 @@ from .const import (
 )
 from .helpers import (
     async_load_device_data,
+    clear_command_repeat_at_path,
     command_path_to_key,
     flatten_command_paths,
+    get_command_repeat_at_path,
     get_command_value_at_path,
     infer_title,
     get_manufacturers,
     get_models_for_manufacturer,
     parse_command_overrides,
-    remove_command_override_at_path,
-    set_command_override_at_path,
+    set_command_repeat_at_path,
 )
 from .controller import get_controller
 
@@ -311,6 +316,57 @@ def _build_compatibility_message(
         )
 
     return "No test sent yet."
+
+
+# Values the old single-page options form saved into the options although
+# nothing reads them; dropped whenever a command's settings are saved.
+_OLD_COMMAND_FORM_KEYS = (
+    CONF_OVERRIDE_REPEAT_COUNT,
+    CONF_OVERRIDE_REPEAT_DELAY,
+    CONF_OVERRIDE_REMOVE,
+    CONF_LEARN_COMMAND,
+)
+
+
+def _repeat_count_selector():
+    # A box, not a slider: a slider does not show the number it is set to.
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=1,
+            max=20,
+            step=1,
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
+
+
+def _repeat_delay_selector():
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0,
+            max=30,
+            step=0.1,
+            mode=selector.NumberSelectorMode.BOX,
+            unit_of_measurement="s",
+        )
+    )
+
+
+def _device_repeat_defaults(data: dict[str, Any]) -> tuple[int, float]:
+    """Return the (repeat_count, repeat_delay_secs) every command gets unless
+    it sets its own; an empty default delay means the delay between commands."""
+    try:
+        count = max(1, int(data.get(CONF_DEFAULT_REPEAT_COUNT) or DEFAULT_REPEAT_COUNT))
+    except (TypeError, ValueError):
+        count = DEFAULT_REPEAT_COUNT
+    delay = data.get(CONF_DEFAULT_REPEAT_DELAY)
+    if delay is None:
+        delay = data.get(CONF_DELAY, DEFAULT_DELAY)
+    try:
+        delay = max(0.0, float(delay))
+    except (TypeError, ValueError):
+        delay = DEFAULT_DELAY
+    return count, delay
 
 
 class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -777,10 +833,19 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ARSmartIROptionsFlow(config_entries.OptionsFlow):
+    """Options: a menu leading to the general settings or to one command.
+
+    A codeset can hold hundreds of commands (an AC has one per mode, fan
+    speed and temperature), so picking a command gets a screen of its own
+    instead of a dropdown at the bottom of the long settings form, and its
+    repeat settings are shown on the next screen for that command only.
+    """
+
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
         self._learn_status: str = ""
         self._draft_data: dict[str, Any] = {}
+        self._selected_command: str = ""
 
     def _get_current_data(self) -> dict[str, Any]:
         return {
@@ -789,19 +854,15 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
             **self._draft_data,
         }
 
-    # ── step: init (main options page) ───────────────────────────────────────
-
-    async def async_step_init(self, user_input=None):
-        errors = {}
-
-        data = self._get_current_data()
+    async def _async_command_options(
+        self, data: dict[str, Any]
+    ) -> list[selector.SelectOptionDict]:
         override_data = parse_command_overrides(data.get(CONF_COMMAND_OVERRIDES, {}))
         device_data = await async_load_device_data(
             data.get(CONF_DEVICE_CODE),
             data.get(CONF_PLATFORM),
         )
-        command_paths = flatten_command_paths(device_data.get("commands", {}))
-        command_options = [
+        return [
             selector.SelectOptionDict(
                 value=command_path_to_key(path),
                 label=(
@@ -810,75 +871,39 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
                     else command_path_to_key(path)
                 ),
             )
-            for path in command_paths
+            for path in flatten_command_paths(device_data.get("commands", {}))
         ]
-        selected_key = (
-            user_input.get(CONF_OVERRIDE_COMMAND)
-            if user_input is not None
-            else data.get(CONF_OVERRIDE_COMMAND)
-            or (command_options[0]["value"] if command_options else "")
+
+    # ── step: init (menu) ─────────────────────────────────────────────────────
+
+    async def async_step_init(self, user_input=None):
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["general", "command"],
         )
-        selected_path = tuple(selected_key.split(" / ")) if selected_key else ()
-        current_override = (
-            get_command_value_at_path(override_data, selected_path)
-            if selected_path
-            else None
-        )
-        current_repeat = 1
-        current_delay = 0.0
-        current_remove = False
-        if isinstance(current_override, dict):
-            current_repeat = int(current_override.get("repeat_count", 1) or 1)
-            current_delay = float(current_override.get("repeat_delay_secs", 0.0) or 0.0)
+
+    # ── step: general settings ────────────────────────────────────────────────
+
+    async def async_step_general(self, user_input=None):
+        errors: dict[str, str] = {}
+        data = self._get_current_data()
 
         if user_input is not None:
-            # Navigate to the learn step if requested.
-            if user_input.get(CONF_LEARN_COMMAND):
-                # Persist the currently selected command path so the learn
-                # step can pre-populate its dropdown to the same selection.
-                self._pending_override_command = selected_key
-                return await self.async_step_learn()
-
             if user_input.get(CONF_CONTROLLER) != data.get(CONF_CONTROLLER):
+                # Another controller takes another kind of target: show the
+                # form again with that controller's fields.
                 updated_data = {**data, **user_input}
                 updated_data[CONF_CONTROLLER_DATA] = ""
                 updated_data.pop(CONF_CONTROLLER_ENTITY, None)
                 updated_data.pop(CONF_INFRARED_ENTITY, None)
                 self._draft_data = updated_data
-                return self.async_show_form(
-                    step_id="init",
-                    data_schema=vol.Schema(
-                        self._build_options_schema(
-                            updated_data,
-                            command_options,
-                            selected_key,
-                            current_repeat,
-                            current_delay,
-                            current_remove,
-                        )
-                    ),
-                    errors=errors,
-                )
+                return self._show_general_form(updated_data, errors)
 
             cleaned_input = dict(user_input)
 
             if _controller_target_conflict(cleaned_input):
                 errors["base"] = "controller_target_conflict"
-                updated_data = {**data, **cleaned_input}
-                return self.async_show_form(
-                    step_id="init",
-                    data_schema=vol.Schema(
-                        self._build_options_schema(
-                            updated_data,
-                            command_options,
-                            selected_key,
-                            current_repeat,
-                            current_delay,
-                            current_remove,
-                        )
-                    ),
-                    errors=errors,
-                )
+                return self._show_general_form({**data, **cleaned_input}, errors)
 
             _normalize_controller_target(cleaned_input)
 
@@ -887,62 +912,147 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
                     cleaned_input.get(CONF_CONTROLLER, "")
                 )
                 errors[error_key] = "required"
-                updated_data = {**data, **cleaned_input}
-                return self.async_show_form(
-                    step_id="init",
-                    data_schema=vol.Schema(
-                        self._build_options_schema(
-                            updated_data,
-                            command_options,
-                            selected_key,
-                            current_repeat,
-                            current_delay,
-                            current_remove,
-                        )
-                    ),
-                    errors=errors,
-                )
+                return self._show_general_form({**data, **cleaned_input}, errors)
 
-            if selected_path:
-                remove_override = bool(user_input.get(CONF_OVERRIDE_REMOVE, False))
-                repeat_count = int(user_input.get(CONF_OVERRIDE_REPEAT_COUNT, 1) or 1)
-                repeat_delay = float(user_input.get(CONF_OVERRIDE_REPEAT_DELAY, 0.0) or 0.0)
+            cleaned_input[CONF_DEFAULT_REPEAT_COUNT] = int(
+                cleaned_input.get(CONF_DEFAULT_REPEAT_COUNT, DEFAULT_REPEAT_COUNT)
+            )
 
-                if remove_override or (
-                    repeat_count <= 1
-                    and repeat_delay <= 0
-                ):
-                    override_data = remove_command_override_at_path(
-                        override_data,
-                        selected_path,
-                    )
-                else:
-                    override_data = set_command_override_at_path(
-                        override_data,
-                        selected_path,
-                        repeat_count,
-                        repeat_delay,
-                    )
-
-            cleaned_input[CONF_COMMAND_OVERRIDES] = override_data
-            cleaned_input[CONF_OVERRIDE_COMMAND] = selected_key
-            cleaned_input.pop(CONF_LEARN_COMMAND, None)
+            # This form owns every option except the per-command ones, which
+            # the command step saves; keep those as they are.
+            options = {
+                key: value
+                for key, value in self._config_entry.options.items()
+                if key in (CONF_COMMAND_OVERRIDES, CONF_OVERRIDE_COMMAND)
+            }
+            options.update(cleaned_input)
             self._draft_data = {}
-            return self.async_create_entry(title="", data=cleaned_input)
+            return self.async_create_entry(title="", data=options)
+
+        return self._show_general_form(data, errors)
+
+    def _show_general_form(self, data: dict[str, Any], errors: dict[str, str]):
+        return self.async_show_form(
+            step_id="general",
+            data_schema=vol.Schema(self._build_general_schema(data)),
+            errors=errors,
+        )
+
+    # ── step: command (pick one) ──────────────────────────────────────────────
+
+    async def async_step_command(self, user_input=None):
+        errors: dict[str, str] = {}
+        data = self._get_current_data()
+        command_options = await self._async_command_options(data)
+        if not command_options:
+            return self.async_abort(reason="no_commands")
+        command_keys = [option["value"] for option in command_options]
+
+        if user_input is not None:
+            # The picker takes typed text so the long list can be searched;
+            # only a command from the list can be configured. "cool/low/25"
+            # is accepted for "cool / low / 25", unless a command is really
+            # named with a slash (e.g. "play/pause").
+            typed = (user_input.get(CONF_OVERRIDE_COMMAND) or "").strip()
+            selected = typed
+            if selected not in command_keys:
+                selected = " / ".join(part.strip() for part in typed.split("/"))
+            if selected in command_keys:
+                self._selected_command = selected
+                return await self.async_step_command_edit()
+            errors[CONF_OVERRIDE_COMMAND] = "invalid_command"
+
+        default = data.get(CONF_OVERRIDE_COMMAND)
+        if default not in command_keys:
+            default = command_keys[0]
 
         return self.async_show_form(
-            step_id="init",
+            step_id="command",
             data_schema=vol.Schema(
-                self._build_options_schema(
-                    data,
-                    command_options,
-                    selected_key,
-                    current_repeat,
-                    current_delay,
-                    current_remove,
-                )
+                {
+                    vol.Required(
+                        CONF_OVERRIDE_COMMAND,
+                        default=default,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=command_options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                            custom_value=True,
+                        )
+                    ),
+                }
             ),
             errors=errors,
+        )
+
+    # ── step: command_edit (repeat settings of the picked command) ────────────
+
+    async def async_step_command_edit(self, user_input=None):
+        selected = self._selected_command
+        if not selected:
+            return await self.async_step_command()
+
+        path = tuple(selected.split(" / "))
+        data = self._get_current_data()
+        override_data = parse_command_overrides(data.get(CONF_COMMAND_OVERRIDES, {}))
+        own_repeat = get_command_repeat_at_path(override_data, path)
+        default_count, default_delay = _device_repeat_defaults(data)
+
+        if user_input is not None:
+            if user_input.get(CONF_LEARN_COMMAND):
+                # Pre-select this command in the learn step's dropdown.
+                self._pending_override_command = selected
+                return await self.async_step_learn()
+
+            if user_input.get(CONF_USE_DEVICE_DEFAULT, False):
+                override_data = clear_command_repeat_at_path(override_data, path)
+            else:
+                override_data = set_command_repeat_at_path(
+                    override_data,
+                    path,
+                    int(user_input.get(CONF_OVERRIDE_REPEAT_COUNT, default_count)),
+                    float(user_input.get(CONF_OVERRIDE_REPEAT_DELAY, default_delay)),
+                )
+
+            options = {
+                key: value
+                for key, value in self._config_entry.options.items()
+                if key not in _OLD_COMMAND_FORM_KEYS
+            }
+            options[CONF_COMMAND_OVERRIDES] = override_data
+            options[CONF_OVERRIDE_COMMAND] = selected
+            return self.async_create_entry(title="", data=options)
+
+        shown_count, shown_delay = own_repeat or (default_count, default_delay)
+        return self.async_show_form(
+            step_id="command_edit",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_USE_DEVICE_DEFAULT,
+                        default=own_repeat is None,
+                    ): bool,
+                    vol.Required(
+                        CONF_OVERRIDE_REPEAT_COUNT,
+                        default=shown_count,
+                    ): _repeat_count_selector(),
+                    vol.Required(
+                        CONF_OVERRIDE_REPEAT_DELAY,
+                        default=shown_delay,
+                    ): _repeat_delay_selector(),
+                    vol.Required(CONF_LEARN_COMMAND, default=False): bool,
+                }
+            ),
+            description_placeholders={
+                "command": selected,
+                "current": (
+                    "follows the device default"
+                    if own_repeat is None
+                    else f"own setting, sent {own_repeat[0]} time(s), "
+                    f"{own_repeat[1]:g} s apart"
+                ),
+                "default": f"sent {default_count} time(s), {default_delay:g} s apart",
+            },
         )
 
     # ── step: learn ───────────────────────────────────────────────────────────
@@ -1035,15 +1145,7 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
 
     # ── schema builders ───────────────────────────────────────────────────────
 
-    def _build_options_schema(
-        self,
-        data: dict[str, Any],
-        command_options: list[Any],
-        selected_key: str,
-        current_repeat: int,
-        current_delay: float,
-        current_remove: bool,
-    ) -> dict[Any, Any]:
+    def _build_general_schema(self, data: dict[str, Any]) -> dict[Any, Any]:
         schema: dict[Any, Any] = {
             vol.Optional(
                 CONF_NAME,
@@ -1131,33 +1233,18 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
             )
         ] = vol.Coerce(float)
 
-        schema.update(
-            {
-                vol.Optional(
-                    CONF_OVERRIDE_COMMAND,
-                    default=selected_key,
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=command_options,
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Optional(
-                    CONF_OVERRIDE_REPEAT_COUNT,
-                    default=current_repeat,
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
-                vol.Optional(
-                    CONF_OVERRIDE_REPEAT_DELAY,
-                    default=current_delay,
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
-                vol.Optional(
-                    CONF_OVERRIDE_REMOVE,
-                    default=current_remove,
-                ): bool,
-                # ── learn shortcut ────────────────────────────────────────────
-                vol.Optional(CONF_LEARN_COMMAND, default=False): bool,
-            }
-        )
+        schema[
+            vol.Required(
+                CONF_DEFAULT_REPEAT_COUNT,
+                default=_device_repeat_defaults(data)[0],
+            )
+        ] = _repeat_count_selector()
+        schema[
+            vol.Optional(
+                CONF_DEFAULT_REPEAT_DELAY,
+                description={"suggested_value": data.get(CONF_DEFAULT_REPEAT_DELAY)},
+            )
+        ] = _repeat_delay_selector()
 
         return schema
 
